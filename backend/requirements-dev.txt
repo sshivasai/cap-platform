@@ -1,0 +1,15 @@
+# ================================================
+# File: backend/requirements-dev.txt
+# Development dependencies for CAP Platform Backend
+# Testing Framework
+pytest==8.3.4
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+pytest-mock==3.14.0
+
+# Code Quality & Formatting
+black==25.1.0
+isort==5.13.2
+flake8==7.1.2
+mypy==1.14.1
+pre-commit==4.0.1
