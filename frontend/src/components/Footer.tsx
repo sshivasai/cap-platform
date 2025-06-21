@@ -6,9 +6,16 @@ export default function Footer() {
       <div className="mx-auto max-w-6xl">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
           <div>
-            <div className="text-2xl font-bold bg-gradient-to-r from-gray-200 to-gray-400 bg-clip-text text-transparent mb-4">
-              CAP
-            </div>
+            <Link href="/" className="flex items-center space-x-2 mb-4">
+              <img 
+                src="/Logo_BW.png" 
+                alt="CAP Logo" 
+                className="w-24 h-auto"
+              />
+              <div className="text-2xl font-bold bg-gradient-to-r from-gray-200 to-gray-400 bg-clip-text text-transparent mb-4">
+                CAP
+              </div>
+            </Link>
             <p className="text-gray-400">
               The future of conversational AI platforms
             </p>
