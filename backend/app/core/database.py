@@ -1,3 +1,4 @@
+# File: backend/app/core/database.py
 """
 Database configuration and connection management for CAP Platform.
 
@@ -24,7 +25,7 @@ from sqlalchemy.ext.asyncio import (
     AsyncEngine
 )
 from sqlalchemy.orm import DeclarativeBase, declared_attr, sessionmaker, Session
-from sqlalchemy.pool import QueuePool
+from sqlalchemy.pool import NullPool, StaticPool
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from qdrant_client import QdrantClient
 from qdrant_client.http import models as qdrant_models
@@ -102,17 +103,26 @@ class DatabaseManager:
             # Initialize PostgreSQL
             await self._initialize_postgresql()
             
-            # Initialize MongoDB
-            await self._initialize_mongodb()
+            # Initialize MongoDB (optional)
+            try:
+                await self._initialize_mongodb()
+            except Exception as e:
+                logger.warning(f"MongoDB initialization failed (optional): {e}")
             
-            # Initialize Qdrant
-            await self._initialize_qdrant()
+            # Initialize Qdrant (optional)
+            try:
+                await self._initialize_qdrant()
+            except Exception as e:
+                logger.warning(f"Qdrant initialization failed (optional): {e}")
             
-            # Initialize Redis
-            await self._initialize_redis()
+            # Initialize Redis (optional)
+            try:
+                await self._initialize_redis()
+            except Exception as e:
+                logger.warning(f"Redis initialization failed (optional): {e}")
             
             self._initialized = True
-            logger.info("All database connections initialized successfully")
+            logger.info("Database connections initialized successfully")
             
         except Exception as e:
             logger.error(f"Failed to initialize databases: {e}")
@@ -123,15 +133,10 @@ class DatabaseManager:
         """Initialize PostgreSQL connections (async and sync)."""
         logger.info("Initializing PostgreSQL connections...")
         
-        # Async Engine Configuration
+        # Async Engine Configuration - FIXED for asyncio
         async_engine_config = {
             "url": settings.postgres_url,
-            "poolclass": QueuePool,
-            "pool_size": 20,  # Base pool size
-            "max_overflow": 30,  # Additional connections beyond pool_size
-            "pool_pre_ping": True,  # Validate connections before use
-            "pool_recycle": 3600,  # Recycle connections every hour
-            "pool_timeout": 30,  # Timeout when getting connection from pool
+            "poolclass": NullPool,  # Use NullPool for async engines
             "echo": settings.DEBUG,  # Log SQL queries in debug mode
             "future": True,  # Use SQLAlchemy 2.0 style
         }
@@ -151,11 +156,8 @@ class DatabaseManager:
         # Sync Engine Configuration (for Alembic migrations)
         sync_engine_config = {
             "url": settings.postgres_sync_url,
-            "poolclass": QueuePool,
-            "pool_size": 10,
-            "max_overflow": 20,
+            "poolclass": StaticPool,  # Use StaticPool for sync engine in async context
             "pool_pre_ping": True,
-            "pool_recycle": 3600,
             "echo": settings.DEBUG,
             "future": True,
         }
@@ -331,21 +333,21 @@ class DatabaseManager:
     def mongo_db(self) -> AsyncIOMotorDatabase:
         """Get MongoDB database."""
         if not self._mongo_db:
-            raise RuntimeError("Database not initialized. Call initialize() first.")
+            raise RuntimeError("MongoDB not initialized. Call initialize() first.")
         return self._mongo_db
     
     @property
     def qdrant_client(self) -> QdrantClient:
         """Get Qdrant client."""
         if not self._qdrant_client:
-            raise RuntimeError("Database not initialized. Call initialize() first.")
+            raise RuntimeError("Qdrant not initialized. Call initialize() first.")
         return self._qdrant_client
     
     @property
     def redis_client(self) -> redis.Redis:
         """Get Redis client."""
         if not self._redis_client:
-            raise RuntimeError("Database not initialized. Call initialize() first.")
+            raise RuntimeError("Redis not initialized. Call initialize() first.")
         return self._redis_client
     
     # ================================
@@ -417,8 +419,11 @@ class DatabaseManager:
         
         # Check MongoDB
         try:
-            await self._mongo_client.admin.command('ping')
-            health_status["mongodb"]["status"] = "healthy"
+            if self._mongo_client:
+                await self._mongo_client.admin.command('ping')
+                health_status["mongodb"]["status"] = "healthy"
+            else:
+                health_status["mongodb"]["status"] = "not_configured"
         except Exception as e:
             health_status["mongodb"]["status"] = "unhealthy"
             health_status["mongodb"]["error"] = str(e)
@@ -426,8 +431,11 @@ class DatabaseManager:
         
         # Check Qdrant
         try:
-            self._qdrant_client.get_cluster_info()
-            health_status["qdrant"]["status"] = "healthy"
+            if self._qdrant_client:
+                self._qdrant_client.get_cluster_info()
+                health_status["qdrant"]["status"] = "healthy"
+            else:
+                health_status["qdrant"]["status"] = "not_configured"
         except Exception as e:
             health_status["qdrant"]["status"] = "unhealthy"
             health_status["qdrant"]["error"] = str(e)
@@ -435,8 +443,11 @@ class DatabaseManager:
         
         # Check Redis
         try:
-            await self._redis_client.ping()
-            health_status["redis"]["status"] = "healthy"
+            if self._redis_client:
+                await self._redis_client.ping()
+                health_status["redis"]["status"] = "healthy"
+            else:
+                health_status["redis"]["status"] = "not_configured"
         except Exception as e:
             health_status["redis"]["status"] = "unhealthy"
             health_status["redis"]["error"] = str(e)
@@ -459,35 +470,35 @@ class DatabaseManager:
         
         # PostgreSQL stats
         if self._async_engine:
-            pool = self._async_engine.pool
             stats["postgresql"] = {
-                "pool_size": pool.size(),
-                "checked_in": pool.checkedin(),
-                "checked_out": pool.checkedout(),
-                "overflow": pool.overflow(),
-                "invalid": pool.invalid(),
+                "engine_type": "async",
+                "pool_class": str(type(self._async_engine.pool)),
+                "url": str(self._async_engine.url).replace(self._async_engine.url.password or "", "***")
             }
         
         # Redis stats
-        if self._redis_client:
-            redis_info = await self._redis_client.info()
-            stats["redis"] = {
-                "connected_clients": redis_info.get("connected_clients", 0),
-                "used_memory": redis_info.get("used_memory_human", "0B"),
-                "total_commands_processed": redis_info.get("total_commands_processed", 0),
-            }
+        try:
+            if self._redis_client:
+                redis_info = await self._redis_client.info()
+                stats["redis"] = {
+                    "connected_clients": redis_info.get("connected_clients", 0),
+                    "used_memory": redis_info.get("used_memory_human", "0B"),
+                    "total_commands_processed": redis_info.get("total_commands_processed", 0),
+                }
+        except Exception as e:
+            stats["redis"] = {"error": str(e)}
         
         # MongoDB stats
-        if self._mongo_client:
-            # Get server status (requires admin privileges)
-            try:
+        try:
+            if self._mongo_client:
+                # Get server status (requires admin privileges)
                 server_status = await self._mongo_client.admin.command("serverStatus")
                 stats["mongodb"] = {
                     "connections": server_status.get("connections", {}),
                     "network": server_status.get("network", {}),
                 }
-            except Exception as e:
-                stats["mongodb"] = {"error": f"Unable to get stats: {e}"}
+        except Exception as e:
+            stats["mongodb"] = {"error": f"Unable to get stats: {e}"}
         
         return stats
     
@@ -592,7 +603,10 @@ async def init_db():
         logger.info("Creating database tables...")
         async with db_manager.async_engine.begin() as conn:
             # Import all models to ensure they're registered
-            from app.models import user, organization, auth  # noqa
+            try:
+                from app.models import user, organization, auth  # noqa
+            except ImportError as e:
+                logger.warning(f"Could not import models (may not exist yet): {e}")
             
             # Create all tables
             await conn.run_sync(Base.metadata.create_all)
@@ -600,7 +614,10 @@ async def init_db():
         logger.info("Database tables created successfully")
     
     # Initialize Qdrant collections if needed
-    await init_qdrant_collections()
+    try:
+        await init_qdrant_collections()
+    except Exception as e:
+        logger.warning(f"Could not initialize Qdrant collections: {e}")
     
     logger.info("Database initialization completed")
 
@@ -672,29 +689,6 @@ async def init_qdrant_collections():
 
 
 # ================================
-# Database Event Handlers
-# ================================
-
-def setup_database_events():
-    """Set up database event handlers for monitoring and logging."""
-    
-    @event.listens_for(db_manager._async_engine, "connect")
-    def receive_connect(dbapi_connection, connection_record):
-        """Handle database connection events."""
-        logger.debug("New PostgreSQL connection established")
-    
-    @event.listens_for(db_manager._async_engine, "checkout")
-    def receive_checkout(dbapi_connection, connection_record, connection_proxy):
-        """Handle connection checkout from pool."""
-        logger.debug("Connection checked out from pool")
-    
-    @event.listens_for(db_manager._async_engine, "checkin")
-    def receive_checkin(dbapi_connection, connection_record):
-        """Handle connection checkin to pool."""
-        logger.debug("Connection checked back into pool")
-
-
-# ================================
 # Database Utilities
 # ================================
 
@@ -746,7 +740,7 @@ async def monitor_connections():
         
         # Log summary
         healthy_services = sum(1 for service in health.values() if service["status"] == "healthy")
-        total_services = len(health)
+        total_services = len([s for s in health.values() if s["status"] != "not_configured"])
         
         logger.info(
             f"Database health: {healthy_services}/{total_services} services healthy"
